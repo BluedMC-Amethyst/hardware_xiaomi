@@ -23,12 +23,12 @@ xiaomi_touch_hal_cc_defaults {
 
 cc_binary {
     name: "vendor.lineage.touch@1.0-service.xiaomi",
-    vintf_fragments: ["vendor.lineage.touch@1.0-service.xiaomi.xml"],
-    init_rc: ["vendor.lineage.touch@1.0-service.xiaomi.rc"],
     defaults: [
         "hidl_defaults",
         "xiaomi_touch_hal_defaults",
     ],
+    vintf_fragments: ["vendor.lineage.touch@1.0-service.xiaomi.xml"],
+    init_rc: ["vendor.lineage.touch@1.0-service.xiaomi.rc"],
     relative_install_path: "hw",
     proprietary: true,
     srcs: [

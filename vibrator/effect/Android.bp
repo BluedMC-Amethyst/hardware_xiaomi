@@ -17,5 +17,5 @@ cc_library_shared {
     static_libs: [
         "libc++fs",
     ],
-    export_include_dirs: ["."]
+    export_include_dirs: ["."],
 }

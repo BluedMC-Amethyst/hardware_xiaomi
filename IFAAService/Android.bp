@@ -13,7 +13,6 @@ android_app {
     aidl: {
         local_include_dirs: ["src"],
     },
-    resource_dirs: ["res"],
 
     static_libs: [
         "android.hidl.base-V1.0-java",
