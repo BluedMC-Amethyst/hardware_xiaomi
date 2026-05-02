@@ -1,0 +1,15 @@
+//
+// SPDX-FileCopyrightText: The LineageOS Project
+// SPDX-License-Identifier: Apache-2.0
+//
+
+package vendor.xiaomi.hardware.intentaware@1.0;
+
+import IEventCallback;
+
+interface IIntentAwareService {
+    oneway sendMessage(int32_t type, string payload);
+    registerReceiver(int32_t type, IEventCallback callback)
+        generates (int64_t token);
+    oneway unregisterReceiver(int64_t token);
+};
