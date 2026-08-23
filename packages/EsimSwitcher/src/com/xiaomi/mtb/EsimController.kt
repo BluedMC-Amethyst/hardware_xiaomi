@@ -91,8 +91,12 @@ class EsimController private constructor(private val context: Context) {
             "esim_enabled",
             if (isEnabled) 1 else 0,
         )
-        // NOTE: intentionally NOT calling onSetEsimStatus / onGetEsimStatus -
-        // they ride the same hook-83 QMI path that halts the modem.
+        // NOTE: intentionally NOT calling onGetEsimStatus - it rides the same
+        // hook-83 QMI path that halts the modem.
+        // Exact jar signatures (dumped via reflection):
+        //   onHookUimPowerReqEx(int,int,int) -> boolean
+        //   onHookEsimPowerReqEx(int,int,int,int) -> boolean
+        //   onSetEsimStatus(int,boolean) -> int
         callMiRilHookMethod("onHookUimPowerReqEx", false, 0, 2, -1)
 
         if (experimentalEnabled()) {
@@ -113,36 +117,26 @@ class EsimController private constructor(private val context: Context) {
      */
     private fun runExperimental(isEnabled: Boolean) {
         val power = if (isEnabled) 1 else 0
-        runCatching {
-            miRilHookClass?.declaredMethods
-                ?.filter {
-                    it.name.contains("Esim") ||
-                        it.name == "onHookUimPowerReqEx" ||
-                        it.name.startsWith("onHookEfs")
-                }
-                ?.forEach {
-                    Log.w(
-                        TAG,
-                        "SIG ${it.name}(${it.parameterTypes.joinToString(",") { p -> p.simpleName }}) -> ${it.returnType.simpleName}",
-                    )
-                }
+        // Dedicated eSIM power request - exact 4-int signature, try plausible orders.
+        val quadCombos = listOf(
+            intArrayOf(0, 2, 1, power),
+            intArrayOf(1, 2, 1, power),
+            intArrayOf(0, 1, 2, power),
+            intArrayOf(power, 0, 2, 1),
+        )
+        for (c in quadCombos) {
+            runCatching {
+                Log.w(TAG, "EXP EsimPowerReqEx(${c.joinToString(",")}) -> " +
+                    callMiRilHookMethod("onHookEsimPowerReqEx", false, c[0], c[1], c[2], c[3]))
+            }
         }
+        // LAST and riskiest: properly-formed set-status. The GET variant of this
+        // hook family hard-hangs the modem; if this one does too we black-list it.
+        val status = if (isEnabled) 0 else 1
+        Log.w(TAG, "EXP attempting onSetEsimStatus($status, true) - watch for hang")
         runCatching {
-            val gpio = callMiRilHookMethod("onGetEsimGpioStatus", -1)
-            Log.w(TAG, "EXP onGetEsimGpioStatus -> $gpio")
-        }
-        dumpUimHwConfig()
-        runCatching {
-            Log.w(TAG, "EXP onHookEsimPowerReqEx(4-arg) -> " +
-                callMiRilHookMethod("onHookEsimPowerReqEx", false, 0, 2, power))
-        }
-        runCatching {
-            Log.w(TAG, "EXP onHookEsimPowerReqEx(slot,power) -> " +
-                callMiRilHookMethod("onHookEsimPowerReqEx", false, 1, power))
-        }
-        runCatching {
-            Log.w(TAG, "EXP onHookEsimPowerReqEx(b,slot,power) -> " +
-                callMiRilHookMethod("onHookEsimPowerReqEx", false, 1, 2, power))
+            Log.w(TAG, "EXP SetEsimStatus -> " +
+                callMiRilHookMethod("onSetEsimStatus", -1, status, true))
         }
     }
 
