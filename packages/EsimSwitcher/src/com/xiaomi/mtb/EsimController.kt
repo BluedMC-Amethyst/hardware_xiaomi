@@ -114,6 +114,20 @@ class EsimController private constructor(private val context: Context) {
     private fun runExperimental(isEnabled: Boolean) {
         val power = if (isEnabled) 1 else 0
         runCatching {
+            miRilHookClass?.declaredMethods
+                ?.filter {
+                    it.name.contains("Esim") ||
+                        it.name == "onHookUimPowerReqEx" ||
+                        it.name.startsWith("onHookEfs")
+                }
+                ?.forEach {
+                    Log.w(
+                        TAG,
+                        "SIG ${it.name}(${it.parameterTypes.joinToString(",") { p -> p.simpleName }}) -> ${it.returnType.simpleName}",
+                    )
+                }
+        }
+        runCatching {
             val gpio = callMiRilHookMethod("onGetEsimGpioStatus", -1)
             Log.w(TAG, "EXP onGetEsimGpioStatus -> $gpio")
         }
