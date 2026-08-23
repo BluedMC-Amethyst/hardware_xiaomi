@@ -8,6 +8,7 @@ package com.xiaomi.mtb
 
 import android.app.ActivityThread
 import android.content.Context
+import android.provider.Settings
 import android.telephony.SubscriptionManager
 import android.util.Log
 import dalvik.system.DexClassLoader
@@ -73,14 +74,87 @@ class EsimController private constructor(private val context: Context) {
     }
 
     fun getEsimEnabled(): Boolean {
-        return (callMiRilHookMethod("onGetEsimStatus", -1) as? Int ?: -1) == 0
+        // SM7635 modems hard-wedge on the MiRilHook "get esim status" query (hook 83),
+        // taking down the whole system. Track the state in secure settings instead and
+        // rely purely on the UIM slot-power requests below.
+        return Settings.Secure.getInt(
+            context.contentResolver,
+            "esim_enabled",
+            0,
+        ) == 1
     }
 
     fun setEsimEnabled(isEnabled: Boolean) {
         if (DEBUG) Log.d(TAG, "setEsimEnabled, isEnabled = $isEnabled")
+        Settings.Secure.putInt(
+            context.contentResolver,
+            "esim_enabled",
+            if (isEnabled) 1 else 0,
+        )
+        // NOTE: intentionally NOT calling onSetEsimStatus / onGetEsimStatus -
+        // they ride the same hook-83 QMI path that halts the modem.
         callMiRilHookMethod("onHookUimPowerReqEx", false, 0, 2, -1)
-        callMiRilHookMethod("onSetEsimStatus", -1, if (isEnabled) 0 else 1, true)
+
+        if (experimentalEnabled()) {
+            runExperimental(isEnabled)
+        }
+
         callMiRilHookMethod("onHookUimPowerReqEx", false, 1, 2, if (isEnabled) 1 else 0)
+    }
+
+    private fun experimentalEnabled(): Boolean =
+        Settings.Secure.getInt(context.contentResolver, "esim_experimental", 0) == 1
+
+    /**
+     * Opt-in experiments, enabled via:
+     *   adb shell settings put secure esim_experimental 1
+     * Every call is individually guarded; a wrong signature only throws
+     * NoSuchMethodException inside callMiRilHookMethod and is logged.
+     */
+    private fun runExperimental(isEnabled: Boolean) {
+        val power = if (isEnabled) 1 else 0
+        runCatching {
+            val gpio = callMiRilHookMethod("onGetEsimGpioStatus", -1)
+            Log.w(TAG, "EXP onGetEsimGpioStatus -> $gpio")
+        }
+        dumpUimHwConfig()
+        runCatching {
+            Log.w(TAG, "EXP onHookEsimPowerReqEx(4-arg) -> " +
+                callMiRilHookMethod("onHookEsimPowerReqEx", false, 0, 2, power))
+        }
+        runCatching {
+            Log.w(TAG, "EXP onHookEsimPowerReqEx(slot,power) -> " +
+                callMiRilHookMethod("onHookEsimPowerReqEx", false, 1, power))
+        }
+    }
+
+    /** Reads the modem NV item that decides whether slot 2 hosts an eUICC. */
+    private fun dumpUimHwConfig() {
+        val path = "/nv/item_files/modem/uim/uimdrv/uim_hw_config"
+        val variants = arrayOf(
+            arrayOf<Any?>(path),
+            arrayOf<Any?>(0, path),
+            arrayOf<Any?>(0, path, 256),
+        )
+        for (args in variants) {
+            val result = runCatching {
+                callMiRilHookMethod("onHookEfsReadSync", null, *args)
+            }.getOrNull()
+            if (result != null) {
+                Log.w(TAG, "EXP uim_hw_config(${args.joinToString()}) -> ${hexDump(result)}")
+                return
+            }
+        }
+        Log.w(TAG, "EXP uim_hw_config read failed on all signatures")
+    }
+
+    private fun hexDump(obj: Any?): String {
+        val bytes = when (obj) {
+            is ByteArray -> obj
+            is Array<*> -> obj.filterIsInstance<ByteArray>().firstOrNull()
+            else -> null
+        } ?: return obj.toString()
+        return bytes.take(64).joinToString(" ") { "%02x".format(it) }
     }
 
     private fun setupHook() {
