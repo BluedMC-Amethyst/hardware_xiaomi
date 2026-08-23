@@ -116,9 +116,8 @@ class EsimController private constructor(private val context: Context) {
      * NoSuchMethodException inside callMiRilHookMethod and is logged.
      */
     private fun runExperimental(isEnabled: Boolean) {
-        // CONFIRMED working on SM7635 (returns true; modem performs a 4-byte EFS
-        // write + xiaomi_esim_request_uicc_power_ex internally, no hang).
-        // Signature: onHookEsimPowerReqEx(int,int,int,int)
+        // CONFIRMED working on SM7635 (returns true; modem performs EFS writes +
+        // uicc power ops internally, no hang).
         runCatching {
             Log.w(TAG, "EXP EsimPowerReqEx(${if (isEnabled) 1 else 0},0,2,1) -> " +
                 callMiRilHookMethod(
@@ -130,30 +129,20 @@ class EsimController private constructor(private val context: Context) {
                     1,
                 ))
         }
-        // Read back the slot config to see what the modem changed.
-        dumpUimHwConfig()
+        // Key NV items (signatures verified):
+        //   onHookEfsReadSync(int,String) -> ByteBuffer
+        efsRead("/nv/item_files/modem/uim/uimdrv/esim_enable")
+        efsRead("/nv/item_files/modem/uim/uimdrv/uim_extended_slot_mapping_config")
+        efsRead("/nv/item_files/modem/uim/uimdrv/uim_hw_config")
         // BLACK-LISTED: onGetEsimStatus (hook 83) AND onSetEsimStatus (hook 84) -
         // both hard-hang the SM7635 modem.
     }
 
-    /** Reads the modem NV item that decides whether slot 2 hosts an eUICC. */
-    private fun dumpUimHwConfig() {
-        val path = "/nv/item_files/modem/uim/uimdrv/uim_hw_config"
-        val variants = arrayOf(
-            arrayOf<Any?>(path),
-            arrayOf<Any?>(0, path),
-            arrayOf<Any?>(0, path, 256),
-        )
-        for (args in variants) {
-            val result = runCatching {
-                callMiRilHookMethod("onHookEfsReadSync", null, *args)
-            }.getOrNull()
-            if (result != null) {
-                Log.w(TAG, "EXP uim_hw_config(${args.joinToString()}) -> ${hexDump(result)}")
-                return
-            }
-        }
-        Log.w(TAG, "EXP uim_hw_config read failed on all signatures")
+    private fun efsRead(path: String) {
+        val result = runCatching {
+            callMiRilHookMethod("onHookEfsReadSync", null, 0, path)
+        }.getOrNull()
+        Log.w(TAG, "EXP $path -> ${hexDump(result)}")
     }
 
     private fun hexDump(obj: Any?): String {
