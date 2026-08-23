@@ -8,6 +8,7 @@ package com.xiaomi.mtb
 
 import android.app.ActivityThread
 import android.content.Context
+import android.provider.Settings
 import android.telephony.SubscriptionManager
 import android.util.Log
 import dalvik.system.DexClassLoader
@@ -73,13 +74,26 @@ class EsimController private constructor(private val context: Context) {
     }
 
     fun getEsimEnabled(): Boolean {
-        return (callMiRilHookMethod("onGetEsimStatus", -1) as? Int ?: -1) == 0
+        // SM7635 modems hard-wedge on the MiRilHook "get esim status" query (hook 83),
+        // taking down the whole system. Track the state in secure settings instead and
+        // rely purely on the UIM slot-power requests below.
+        return Settings.Secure.getInt(
+            context.contentResolver,
+            "esim_enabled",
+            0,
+        ) == 1
     }
 
     fun setEsimEnabled(isEnabled: Boolean) {
         if (DEBUG) Log.d(TAG, "setEsimEnabled, isEnabled = $isEnabled")
+        Settings.Secure.putInt(
+            context.contentResolver,
+            "esim_enabled",
+            if (isEnabled) 1 else 0,
+        )
+        // NOTE: intentionally NOT calling onSetEsimStatus - it rides the same
+        // hook-83 QMI path that halts the modem.
         callMiRilHookMethod("onHookUimPowerReqEx", false, 0, 2, -1)
-        callMiRilHookMethod("onSetEsimStatus", -1, if (isEnabled) 0 else 1, true)
         callMiRilHookMethod("onHookUimPowerReqEx", false, 1, 2, if (isEnabled) 1 else 0)
     }
 
