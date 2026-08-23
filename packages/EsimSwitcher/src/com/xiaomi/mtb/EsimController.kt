@@ -134,6 +134,20 @@ class EsimController private constructor(private val context: Context) {
         efsRead("/nv/item_files/modem/uim/uimdrv/esim_enable")
         efsRead("/nv/item_files/modem/uim/uimdrv/uim_extended_slot_mapping_config")
         efsRead("/nv/item_files/modem/uim/uimdrv/uim_hw_config")
+        // Direct NV write experiment - opt-in via:
+        //   adb shell settings put secure esim_write 1
+        // Original esim_enable content observed: 8b ff ff ff 00 00 00 00
+        if (Settings.Secure.getInt(context.contentResolver, "esim_write", 0) == 1) {
+            val path = "/nv/item_files/modem/uim/uimdrv/esim_enable"
+            val data = byteArrayOf(
+                0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            )
+            runCatching {
+                val r = callMiRilHookMethod("onHookEfsWriteSync", null, 0, path, data)
+                Log.w(TAG, "EXP WRITE esim_enable=01000000... -> ${hexDump(r)}")
+            }
+            efsRead(path)
+        }
         // BLACK-LISTED: onGetEsimStatus (hook 83) AND onSetEsimStatus (hook 84) -
         // both hard-hang the SM7635 modem.
     }
