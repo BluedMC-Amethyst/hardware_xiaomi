@@ -126,6 +126,10 @@ class EsimController private constructor(private val context: Context) {
             Log.w(TAG, "EXP onHookEsimPowerReqEx(slot,power) -> " +
                 callMiRilHookMethod("onHookEsimPowerReqEx", false, 1, power))
         }
+        runCatching {
+            Log.w(TAG, "EXP onHookEsimPowerReqEx(b,slot,power) -> " +
+                callMiRilHookMethod("onHookEsimPowerReqEx", false, 1, 2, power))
+        }
     }
 
     /** Reads the modem NV item that decides whether slot 2 hosts an eUICC. */
@@ -151,10 +155,15 @@ class EsimController private constructor(private val context: Context) {
     private fun hexDump(obj: Any?): String {
         val bytes = when (obj) {
             is ByteArray -> obj
+            is java.nio.ByteBuffer -> {
+                val b = obj.duplicate()
+                b.rewind()
+                ByteArray(b.remaining()).also { b.get(it) }
+            }
             is Array<*> -> obj.filterIsInstance<ByteArray>().firstOrNull()
             else -> null
         } ?: return obj.toString()
-        return bytes.take(64).joinToString(" ") { "%02x".format(it) }
+        return bytes.take(264).joinToString(" ") { "%02x".format(it) }
     }
 
     private fun setupHook() {
