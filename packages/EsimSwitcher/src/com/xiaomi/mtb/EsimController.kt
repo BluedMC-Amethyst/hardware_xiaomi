@@ -91,10 +91,70 @@ class EsimController private constructor(private val context: Context) {
             "esim_enabled",
             if (isEnabled) 1 else 0,
         )
-        // NOTE: intentionally NOT calling onSetEsimStatus - it rides the same
-        // hook-83 QMI path that halts the modem.
+        // NOTE: intentionally NOT calling onSetEsimStatus / onGetEsimStatus -
+        // they ride the same hook-83 QMI path that halts the modem.
         callMiRilHookMethod("onHookUimPowerReqEx", false, 0, 2, -1)
+
+        if (experimentalEnabled()) {
+            runExperimental(isEnabled)
+        }
+
         callMiRilHookMethod("onHookUimPowerReqEx", false, 1, 2, if (isEnabled) 1 else 0)
+    }
+
+    private fun experimentalEnabled(): Boolean =
+        Settings.Secure.getInt(context.contentResolver, "esim_experimental", 0) == 1
+
+    /**
+     * Opt-in experiments, enabled via:
+     *   adb shell settings put secure esim_experimental 1
+     * Every call is individually guarded; a wrong signature only throws
+     * NoSuchMethodException inside callMiRilHookMethod and is logged.
+     */
+    private fun runExperimental(isEnabled: Boolean) {
+        val power = if (isEnabled) 1 else 0
+        runCatching {
+            val gpio = callMiRilHookMethod("onGetEsimGpioStatus", -1)
+            Log.w(TAG, "EXP onGetEsimGpioStatus -> $gpio")
+        }
+        dumpUimHwConfig()
+        runCatching {
+            Log.w(TAG, "EXP onHookEsimPowerReqEx(4-arg) -> " +
+                callMiRilHookMethod("onHookEsimPowerReqEx", false, 0, 2, power))
+        }
+        runCatching {
+            Log.w(TAG, "EXP onHookEsimPowerReqEx(slot,power) -> " +
+                callMiRilHookMethod("onHookEsimPowerReqEx", false, 1, power))
+        }
+    }
+
+    /** Reads the modem NV item that decides whether slot 2 hosts an eUICC. */
+    private fun dumpUimHwConfig() {
+        val path = "/nv/item_files/modem/uim/uimdrv/uim_hw_config"
+        val variants = arrayOf(
+            arrayOf<Any?>(path),
+            arrayOf<Any?>(0, path),
+            arrayOf<Any?>(0, path, 256),
+        )
+        for (args in variants) {
+            val result = runCatching {
+                callMiRilHookMethod("onHookEfsReadSync", null, *args)
+            }.getOrNull()
+            if (result != null) {
+                Log.w(TAG, "EXP uim_hw_config(${args.joinToString()}) -> ${hexDump(result)}")
+                return
+            }
+        }
+        Log.w(TAG, "EXP uim_hw_config read failed on all signatures")
+    }
+
+    private fun hexDump(obj: Any?): String {
+        val bytes = when (obj) {
+            is ByteArray -> obj
+            is Array<*> -> obj.filterIsInstance<ByteArray>().firstOrNull()
+            else -> null
+        } ?: return obj.toString()
+        return bytes.take(64).joinToString(" ") { "%02x".format(it) }
     }
 
     private fun setupHook() {
