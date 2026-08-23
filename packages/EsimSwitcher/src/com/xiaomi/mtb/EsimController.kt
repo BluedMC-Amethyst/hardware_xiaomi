@@ -91,8 +91,12 @@ class EsimController private constructor(private val context: Context) {
             "esim_enabled",
             if (isEnabled) 1 else 0,
         )
-        // NOTE: intentionally NOT calling onSetEsimStatus / onGetEsimStatus -
-        // they ride the same hook-83 QMI path that halts the modem.
+        // NOTE: intentionally NOT calling onGetEsimStatus - it rides the same
+        // hook-83 QMI path that halts the modem.
+        // Exact jar signatures (dumped via reflection):
+        //   onHookUimPowerReqEx(int,int,int) -> boolean
+        //   onHookEsimPowerReqEx(int,int,int,int) -> boolean
+        //   onSetEsimStatus(int,boolean) -> int
         callMiRilHookMethod("onHookUimPowerReqEx", false, 0, 2, -1)
 
         if (experimentalEnabled()) {
@@ -112,49 +116,61 @@ class EsimController private constructor(private val context: Context) {
      * NoSuchMethodException inside callMiRilHookMethod and is logged.
      */
     private fun runExperimental(isEnabled: Boolean) {
-        val power = if (isEnabled) 1 else 0
+        // CONFIRMED working on SM7635 (returns true; modem performs EFS writes +
+        // uicc power ops internally, no hang).
         runCatching {
-            val gpio = callMiRilHookMethod("onGetEsimGpioStatus", -1)
-            Log.w(TAG, "EXP onGetEsimGpioStatus -> $gpio")
+            Log.w(TAG, "EXP EsimPowerReqEx(${if (isEnabled) 1 else 0},0,2,1) -> " +
+                callMiRilHookMethod(
+                    "onHookEsimPowerReqEx",
+                    false,
+                    if (isEnabled) 1 else 0,
+                    0,
+                    2,
+                    1,
+                ))
         }
-        dumpUimHwConfig()
-        runCatching {
-            Log.w(TAG, "EXP onHookEsimPowerReqEx(4-arg) -> " +
-                callMiRilHookMethod("onHookEsimPowerReqEx", false, 0, 2, power))
+        // Key NV items (signatures verified):
+        //   onHookEfsReadSync(int,String) -> ByteBuffer
+        efsRead("/nv/item_files/modem/uim/uimdrv/esim_enable")
+        efsRead("/nv/item_files/modem/uim/uimdrv/uim_extended_slot_mapping_config")
+        efsRead("/nv/item_files/modem/uim/uimdrv/uim_hw_config")
+        // Direct NV write experiment - opt-in via:
+        //   adb shell settings put secure esim_write 1
+        // Original esim_enable content observed: 8b ff ff ff 00 00 00 00
+        if (Settings.Secure.getInt(context.contentResolver, "esim_write", 0) == 1) {
+            val path = "/nv/item_files/modem/uim/uimdrv/esim_enable"
+            val data = byteArrayOf(
+                0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            )
+            runCatching {
+                val r = callMiRilHookMethod("onHookEfsWriteSync", null, 0, path, data)
+                Log.w(TAG, "EXP WRITE esim_enable=01000000... -> ${hexDump(r)}")
+            }
+            efsRead(path)
         }
-        runCatching {
-            Log.w(TAG, "EXP onHookEsimPowerReqEx(slot,power) -> " +
-                callMiRilHookMethod("onHookEsimPowerReqEx", false, 1, power))
-        }
+        // BLACK-LISTED: onGetEsimStatus (hook 83) AND onSetEsimStatus (hook 84) -
+        // both hard-hang the SM7635 modem.
     }
 
-    /** Reads the modem NV item that decides whether slot 2 hosts an eUICC. */
-    private fun dumpUimHwConfig() {
-        val path = "/nv/item_files/modem/uim/uimdrv/uim_hw_config"
-        val variants = arrayOf(
-            arrayOf<Any?>(path),
-            arrayOf<Any?>(0, path),
-            arrayOf<Any?>(0, path, 256),
-        )
-        for (args in variants) {
-            val result = runCatching {
-                callMiRilHookMethod("onHookEfsReadSync", null, *args)
-            }.getOrNull()
-            if (result != null) {
-                Log.w(TAG, "EXP uim_hw_config(${args.joinToString()}) -> ${hexDump(result)}")
-                return
-            }
-        }
-        Log.w(TAG, "EXP uim_hw_config read failed on all signatures")
+    private fun efsRead(path: String) {
+        val result = runCatching {
+            callMiRilHookMethod("onHookEfsReadSync", null, 0, path)
+        }.getOrNull()
+        Log.w(TAG, "EXP $path -> ${hexDump(result)}")
     }
 
     private fun hexDump(obj: Any?): String {
         val bytes = when (obj) {
             is ByteArray -> obj
+            is java.nio.ByteBuffer -> {
+                val b = obj.duplicate()
+                b.rewind()
+                ByteArray(b.remaining()).also { b.get(it) }
+            }
             is Array<*> -> obj.filterIsInstance<ByteArray>().firstOrNull()
             else -> null
         } ?: return obj.toString()
-        return bytes.take(64).joinToString(" ") { "%02x".format(it) }
+        return bytes.take(264).joinToString(" ") { "%02x".format(it) }
     }
 
     private fun setupHook() {
