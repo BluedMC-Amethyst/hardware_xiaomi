@@ -116,28 +116,24 @@ class EsimController private constructor(private val context: Context) {
      * NoSuchMethodException inside callMiRilHookMethod and is logged.
      */
     private fun runExperimental(isEnabled: Boolean) {
-        val power = if (isEnabled) 1 else 0
-        // Dedicated eSIM power request - exact 4-int signature, try plausible orders.
-        val quadCombos = listOf(
-            intArrayOf(0, 2, 1, power),
-            intArrayOf(1, 2, 1, power),
-            intArrayOf(0, 1, 2, power),
-            intArrayOf(power, 0, 2, 1),
-        )
-        for (c in quadCombos) {
-            runCatching {
-                Log.w(TAG, "EXP EsimPowerReqEx(${c.joinToString(",")}) -> " +
-                    callMiRilHookMethod("onHookEsimPowerReqEx", false, c[0], c[1], c[2], c[3]))
-            }
-        }
-        // LAST and riskiest: properly-formed set-status. The GET variant of this
-        // hook family hard-hangs the modem; if this one does too we black-list it.
-        val status = if (isEnabled) 0 else 1
-        Log.w(TAG, "EXP attempting onSetEsimStatus($status, true) - watch for hang")
+        // CONFIRMED working on SM7635 (returns true; modem performs a 4-byte EFS
+        // write + xiaomi_esim_request_uicc_power_ex internally, no hang).
+        // Signature: onHookEsimPowerReqEx(int,int,int,int)
         runCatching {
-            Log.w(TAG, "EXP SetEsimStatus -> " +
-                callMiRilHookMethod("onSetEsimStatus", -1, status, true))
+            Log.w(TAG, "EXP EsimPowerReqEx(${if (isEnabled) 1 else 0},0,2,1) -> " +
+                callMiRilHookMethod(
+                    "onHookEsimPowerReqEx",
+                    false,
+                    if (isEnabled) 1 else 0,
+                    0,
+                    2,
+                    1,
+                ))
         }
+        // Read back the slot config to see what the modem changed.
+        dumpUimHwConfig()
+        // BLACK-LISTED: onGetEsimStatus (hook 83) AND onSetEsimStatus (hook 84) -
+        // both hard-hang the SM7635 modem.
     }
 
     /** Reads the modem NV item that decides whether slot 2 hosts an eUICC. */
