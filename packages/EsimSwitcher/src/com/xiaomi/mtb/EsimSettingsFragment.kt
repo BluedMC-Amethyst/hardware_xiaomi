@@ -8,7 +8,6 @@ package com.xiaomi.mtb
 
 import android.os.Bundle
 import android.util.Log
-import androidx.appcompat.app.AlertDialog
 import androidx.preference.Preference
 import com.android.settingslib.widget.FooterPreference
 import com.android.settingslib.widget.MainSwitchPreference
@@ -26,6 +25,7 @@ class EsimSettingsFragment :
 
     private val switchBar by lazy { findPreference<MainSwitchPreference>("esim_enable")!! }
     private val footerPref by lazy { findPreference<FooterPreference>("esim_footer")!! }
+    private var switchInProgress = false
 
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
         if (DEBUG) Log.d(TAG, "onCreatePreferences")
@@ -38,22 +38,24 @@ class EsimSettingsFragment :
     }
 
     override fun onPreferenceChange(preference: Preference, newValue: Any?): Boolean {
-        if (preference == switchBar) {
+        if (preference == switchBar && !switchInProgress) {
             val isChecked = newValue as Boolean
             if (DEBUG) Log.d(TAG, "onPreferenceChange: $isChecked")
-            if (esimController.getEsimActive()) {
-                if (isChecked) return false
-                AlertDialog.Builder(requireContext())
-                    .setTitle(R.string.esim_warning_title)
-                    .setMessage(R.string.esim_warning_message)
-                    .setPositiveButton(android.R.string.ok, null)
-                    .setCancelable(false)
-                    .show()
-                return false
-            } else {
-                esimController.setEsimEnabled(isChecked)
-            }
+            switchInProgress = true
+            switchBar.isEnabled = false
+            Thread {
+                    val succeeded = esimController.setEsimEnabled(isChecked)
+                    activity?.runOnUiThread {
+                        if (isAdded) {
+                            switchBar.isChecked =
+                                if (succeeded) isChecked else esimController.getEsimEnabled()
+                            switchBar.isEnabled = true
+                            switchInProgress = false
+                        }
+                    }
+                }
+                .start()
         }
-        return true
+        return false
     }
 }
